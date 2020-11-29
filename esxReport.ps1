@@ -311,7 +311,7 @@ Function _GetDeviceList ($esxhost)
 					$Info.DriverVersion = "N/A"
 				}
 
-			    Write-Host "Got HBA $DeviceName Firmware $FirmwareString and Driver: $DriverString"
+			    Write-Host "Got HBA $DeviceName Firmware $($Info.FirmwareVersion) and Driver: $($Info.DriverVersion)"
 			}
 		
 		    #Handle Local Storage Controllers - Get Installed Drivers and Firmware information -T.B.D
