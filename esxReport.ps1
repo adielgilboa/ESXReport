@@ -137,36 +137,7 @@ function _ExecuteConfigurationReport ($vcServer, $Location )
     }
 
 }
-
-Function _ConnectVIServer ($vCenterHost)
-{
-    if (!$vCenterCredentials)
-    {
-        $vCenterCredentials = get-credential -Message "vCenter Administrator Access Credentials"
-    }
-    $vCenterUsername = $vCenterCredentials.UserName
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($vCenterCredentials.Password)
-    $vCenterPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-
-    Import-Module "VMware.PowerCLI" -ErrorAction SilentlyContinue | out-null
-    Get-Module -ListAvailable | where {$_.Name -like "VMware*"} | Import-Module -ErrorAction SilentlyContinue | out-null
-    Connect-VIServer -Server $vCenterHost -User $vCenterUsername -Password $vCenterPassword -force -OutVariable $null | out-null
-
-    if ($PSVersionTable.PSEdition -contains "Core")
-    {
-	    $global:isLinux = $true
-    }
-    else
-    {
-	    $global:isLinux = $false
-    }
-
-    #For Windows Version Only
-    if ($isLinux -eq $false)
-    {
-        $host.ui.RawUI.WindowTitle = $global:defaultviserver.name
-    }
-}	
+	
 
 Function _GetDeviceList ($esxhost)
 {
@@ -313,12 +284,7 @@ Function _GetDeviceList ($esxhost)
 
 			    Write-Host "Got HBA $DeviceName Firmware $($Info.FirmwareVersion) and Driver: $($Info.DriverVersion)"
 			}
-		
-		    #Handle Local Storage Controllers - Get Installed Drivers and Firmware information -T.B.D
-		    #elseif ($device.DeviceClass -eq "MassStorageController")
-		    #{
-			#    #write-host "MassStorageController" #T.B.D
-		    #}  
+		  
             
             if ($info.device -ne $null)
             {
@@ -337,7 +303,6 @@ Function _CheckDeviceOnline ($DeviceList, $OfflineHCL)
         $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
         $headers.Add("Accept", "*/*")
         $headers.Add("Accept-Encoding", "application/gzip, deflate, br")
-        #$headers.Add("Connection", "keep-alive")
         $headers.Add("x-api-key", "SJyb8QjK2L")
         $headers.Add("x-api-toolid", "180209100001")
         $headers.Add("x-request-id", "8f90e8af-4821-4159-aad2-f360533ab2e2")
@@ -377,13 +342,7 @@ Function _CheckDeviceOnline ($DeviceList, $OfflineHCL)
 
 Function _ExportToFiles ($ExportInfo)
 {
-    # Display all Infos
-    #$AllInfo
 
-    # Display ESXi, DeviceName and supported state
-    #$AllInfo |select VMHost,Device,DeviceName,Supported,Referece |ft -AutoSize
-
-    # Display device, driver and firmware information
     $ExportInfoTmp = @()
     foreach ($ExportInfoObj in $ExportInfo)
     {
@@ -392,7 +351,6 @@ Function _ExportToFiles ($ExportInfo)
 	    {	
 		    if ($csvLine.$key -match ",")
 		    {
-			    #write-host "Replacing Info.$key , to _"
 			    $ExportInfoObj.$key = $ExportInfoObj.$key.Replace(",","_")
 		    }
         }
@@ -434,39 +392,11 @@ Function _ExportToFiles ($ExportInfo)
 
     $ExportInfoTmp | ConvertTo-Html -CSSUri "$CSSURI.css" | Set-Content "$ReportName.html"
 
-    if (!$isLinux)
-    {
-	    invoke-item "$ReportName.html" -confirm:$False
-    }
 }
 
 Function _GetServerList ($esxhost)
 {
-#	if (!$ServerEsxiReleases)
-#	{	
-#		if (!$OfflineServerEsxiReleases)
-#		{
-#			$global:ServerEsxiReleases = Invoke-WebRequest -Uri http://www.virten.net/repo/esxiReleases.json | ConvertFrom-Json
-#		}
-#		else
-#		{
-#			$global:ServerEsxiReleases = Get-Content $OfflineServerEsxiReleases | convertfrom-json
-#		}
-#	}
-#    if (!$OfflineServerHclJson)
-#    {
-#        $ServerHclJson = Invoke-WebRequest -Uri http://www.virten.net/repo/vmware-hcl.json
-#        [void][System.Reflection.Assembly]::LoadWithPartialName("System.Web.Extensions")        
-#        $jsonserializer= New-Object -TypeName System.Web.Script.Serialization.JavaScriptSerializer 
-#        $jsonserializer.MaxJsonLength = [int]::MaxValue
-#        $hcl = $jsonserializer.DeserializeObject($ServerHclJson)
-#    }
-#    else
-#    {
-#        $ServerHclJson = Get-Content $OfflineServerHclJson | convertfrom-json
-#        $hcl = $ServerHclJson 
-#    }
-
+	# Gets the host object
 	if ($Location)
 	{
 		$vmHosts = get-vmhost -name $esxhost -Location $Location
@@ -477,6 +407,7 @@ Function _GetServerList ($esxhost)
 	}
     $AllServerInfo = @()
 
+	# Go over each host and extract needed information
     Foreach ($vmHost in $vmHosts) 
     {
         $HostManuf = $($vmHost.Manufacturer)
@@ -508,24 +439,23 @@ Function _GetServerList ($esxhost)
 		
         }
 
- 
         $Data = @()
 
+		# Connects to VMware API Gateway to extract the compatibility
         $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
 		$headers.Add("Accept", "*/*")
 		$headers.Add("Accept-Encoding", "application/gzip, deflate, br")
-	#	$headers.Add("Connection", "keep-alive")
 		$headers.Add("x-api-key", "SJyb8QjK2L")
 		$headers.Add("x-api-toolid", "180209100001")
 		$headers.Add("x-request-id", "64c7522b-be59-445e-b45c-504dda7a6107")
 
-		$model=$Info.Model #"ProLiant DL325 Gen10 Plus" 
-        $releaseversion=$Info.ReleaseLevel #"6.7 U3"
+		$model=$Info.Model 
+        $releaseversion=$Info.ReleaseLevel 
         if ($releaseversion -match "ESXi ")
         {
             $releaseversion.trim("ESXi ")
         }
-		$vendor=$Info.Manufacturer #"HPE"
+		$vendor=$Info.Manufacturer 
         $cpuFeatureId= $vmhost.ExtensionData.Hardware.CpuFeature[1].Eax
         if (($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease) -and ($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease))
         {
@@ -585,9 +515,6 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
     foreach ($device in $DeviceListWithSupport) 
     {
         $Line = "" | Select Parent, VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, BiosVersion, BiosReleaseDate, ServerCpu, ServerSupported, ServerSupportedReleases, ServerReference, ServerNote, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,DeviceWarnings, Reference
-        #$Info = "" | Select Parent, VMHost, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, 
-        #FirmwareVersion, VibVersion, Supported,RecommendedDriverVersion, RecommendedFirmwareVersion, RecommendedESXRelease, Reference
-        #$Info = "" | Select VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, ServerCpu, ServerSupported, ServerSupportedReleases, ServerReference, ServerNote
         foreach ($server in $ServerListWithSupport)
         {
             if ($Device.VMHost -match '^'+$server.VMHost+'$')
