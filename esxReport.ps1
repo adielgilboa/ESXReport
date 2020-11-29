@@ -142,26 +142,6 @@ function _GetClustersStatus ($vcServer, $Username, $Password, $Location )
 
 }
 
-function _GetHCL ($OfflineHCL)
-{
-    if (!$OfflineHCL)
-    {
-	    $hcl = Invoke-WebRequest -Uri http://www.virten.net/repo/vmware-iohcl.json -ErrorAction SilentlyContinue| ConvertFrom-Json
-    }
-    else
-    {	
-	    if (test-path -path $OfflineHCL)
-	    {
-		    $hcl = get-content $OfflineHCL | ConvertFrom-Json
-	    }
-	    else
-	    {
-		    throw "OfflineHCL was not found!"
-	    }
-    }
-    return $hcl
-}
-
 Function _ConnectVIServer ($vCenterHost)
 {
     if (!$vCenterCredentials)
@@ -199,21 +179,6 @@ Function _ConnectVIServer ($vCenterHost)
     }
 }	
 
-function _EnableSSH
-{
-    ##Check TSM-SSH Service status on hosts and enable if needed
-    $HostsSSHServices = Get-VMHost | Get-VMHostService | Where { $_.Key -eq "TSM-SSH" } 
-
-    foreach ($HostSSHService in $HostsSSHServices)
-    {
-	    if ($HostSSHService.Running -eq $false)
-	    {
-		    $HostSSHService | Start-VMHostService
-	    }
-    }
-    return $HostsSSHServices
-}
-
 Function _GetDeviceList ($esxhost)
 {
 	if ($Location)
@@ -241,8 +206,7 @@ Function _GetDeviceList ($esxhost)
 		    continue
 	    }
 
-	    $DeviceFound = $false
-	    $Info = "" | Select Parent, VMHost, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,RecommendedDriverVersion, RecommendedFirmwareVersion, RecommendedESXRelease, Reference
+	    $Info = "" | Select Parent, VMHost, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,DeviceWarnings, Reference
 	    $Info.VMHost = $device.VMHost
 	    $Info.DeviceName = $device.DeviceName
 	    $Info.VendorName = $device.VendorName
@@ -267,7 +231,6 @@ Function _GetDeviceList ($esxhost)
 		{
 			$ESXRelease = $ESXVersion
 		}
-		#write-host "Comparing if current release $ESXRelease is at the compatibility table.. "
 		
 		if (($SimulateESXiVersion -eq $null) -or ($SimulateESXiVersion -eq "") -or ($SimulateESXiVersion -eq " "))
 		{
@@ -277,22 +240,8 @@ Function _GetDeviceList ($esxhost)
 		{
 			$Info.VMHostVersion = $SimulateESXiVersion
 		}
-
-	    # Search HCL entry with PCI IDs VID, DID, SVID and SSID
-	    $EntriesArray = @()
-	    Foreach ($entry in $hcl.data.ioDevices) 
-	    {
-		    If (($Info.vid -eq $entry.vid) -and ($Info.did -eq $entry.did) -and ($Info.svid -eq $entry.svid) -and ($Info.ssid -eq $entry.ssid)) 
-		    {
-			    $EntriesArray += $entry.url
-			    #$Info.Reference = $entry.url
-			    $DeviceFound = $true
-		    } 
-	    }
 	
-	    $Info.Reference = $EntriesArray  -join ";"
-	
-	    if($DeviceFound)
+	    if(($device.DeviceClass -eq "SerialBusController") -or ($device.DeviceClass -eq "NetworkController"))
 	    {
 		    #Handle Network Adapters - Get Installed Drivers and Firmware information using Get-EsxCli Version 2
 		    if ($device.DeviceClass -eq "NetworkController")
@@ -334,7 +283,8 @@ Function _GetDeviceList ($esxhost)
 			    $vmhbaId = $device.VMHost |Get-VMHostHba -ErrorAction SilentlyContinue | where { $_.PCI -like '*'+$device.Id}
 			    $Info.Device = $vmhbaId.Device
 			    $Info.Driver = $vmhbaId.Driver
-			
+							
+				
 			    # Get driver vib package version
 			    Try
 			    {
@@ -354,112 +304,37 @@ Function _GetDeviceList ($esxhost)
 			    }
 			    $Info.VibVersion = $driverVib.Version
 			    $Info.DriverVersion = $vmhbaId.DriverInfo.Version
-			    $DeviceName = $vmhbaId.Device
-			
-			    #write-host "Got Device Name : $DeviceName"
-			    $ESXHostName=$device.VMHost.name
-                
-			
-			    $keyval = $null
-			    $InstanceName = $null
-			    if ($isLinux)
-			    {
-				    $keyval = echo y | sshpass -p $UnsecurePassword ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@$ESXHostIP '/usr/lib/vmware/vmkmgmt_keyval/vmkmgmt_keyval -l -a '
-			    }
-			    else
-			    {
-                    $ErrorActionPreference = 'SilentlyContinue'
-				    $keyval = echo y | .\plink -pw $UnsecurePassword root@$ESXHostName '/usr/lib/vmware/vmkmgmt_keyval/vmkmgmt_keyval -l -a '
-                    $ErrorActionPreference = 'Continue'
-			    } 
-			
-			    try
-			    {
-				    $InstanceName = $keyval | findstr "Instance:" | findstr $DeviceName # 2>&1
-	
-				    if ($InstanceName -eq $null)
-				    {
-					    Throw "could not get instance name!"
-				    }
-			    }
-			    catch
-			    {
-				    try
-				    {
-					    $DeviceName = $DeviceName.replace("_","-")
-					    $InstanceName = $keyval | findstr "Instance:" | findstr $DeviceName # 2>&1
-					    if ($InstanceName -eq $null)
-					    {
-						    Throw "could not get instance name!"
-					    }
-				    }
-				    catch
-				    {
-					    write-host "COULD NOT FIND INSTANCE NAME FOR DEVICE $DeviceName ON HOST " + $device.VMHost.Name
-				    }
-			    }
+			    
+						
+				# Get HBA Device Firmware and Driver using ESXCLI
+				$DeviceName = $vmhbaId.Device
+				$ESXHBAs = $esxcli.storage.san.fc.list.Invoke() |Select  @{N="Adapter";E={$_.Adapter}},@{N="DriverVersion";E={$_.DriverVersion}},@{N="FirmwareVersion";E={$_.FirmwareVersion}}
 				
-				if ($InstanceName)
-				{
-					#write-host = $InstanceName
-					$InstanceName = $InstanceName.split(":")[1].split(" ")[2]
-					#Write-Host "Got instance name $InstanceName"
-					# $keyval =  $keyval -replace '\n',"####"
-					$keyval = $keyval | out-string
-					$keyvalarr = $keyval -split "Key Value Instance:"
-					foreach ($keyvalinstance in $keyvalarr)
-					{
-						$dev = $keyvalinstance -split "\n" | select -First 1
-						$dev = $dev -replace '\n','' 
-						$dev = $dev -replace '\s','' 
-						$InstanceName = $InstanceName -replace '\n',''
-						$InstanceName = $InstanceName -replace '\s',''
-						if ($dev -contains $InstanceName)
-						{
-							$FirmwareString = ""
-							$DriverString = ""
-							if ($dev -match "Emulex")
-							{
-								$FirmwareString = $keyvalinstance -split "\n" | findstr "FW Version:"
-								$FirmwareString = $FirmwareString |findstr "FW"
-								$FirmwareString = $FirmwareString.Split(":")[1]
+				$info.FirmwareVersion = $ESXHBAs | where {$_.Adapter -eq $DeviceName} | select -ExpandProperty "FirmwareVersion"
+				$info.DriverVersion =  $ESXHBAs | where {$_.Adapter -eq $DeviceName} | select -ExpandProperty "DriverVersion"
 
-								$DriverString =  $keyvalinstance -split "\n" | findstr "ROM Version:"
-								$DriverString = $DriverString | findstr "ROM"  
-								$DriverString = $DriverString.Split(":")[1]
-							}
-							else
-							{
-								#Write-Host "found keyval for instance $InstanceName"
-								$FirmwareDriverString = $keyvalinstance -split "\n" | findstr "Firmware"
-								$devicenamefromkeyval = $keyvalinstance -split "\n" | Select-String "Firmware" -Context 1
-								$Info.DeviceName = $devicenamefromkeyval -split "\n" | select -first 1
-
-								$FirmwareString = $FirmwareDriverString.split(",")[0]  -split "FC " | select -Last 1
-								$FirmwareString = $FirmwareString.split(" ")[2]
-								$DriverString = $FirmwareDriverString.split(",")[1].split(" ")[3] 
-							}
-							break
-						}
-
-					}
-					$Info.FirmwareVersion = $FirmwareString	  
-					$Info.DriverVersion = $DriverString
-				}
-				else
+				if ($Info.FirmwareVersion -eq $null)
 				{
 				    $Info.FirmwareVersion = "N/A"
+				}
+				if ($Info.DriverVersion -eq $null)
+				{
 					$Info.DriverVersion = "N/A"
 				}
-			    #Write-Host "Got Firmware $FirmwareString and Driver: $DriverString"
+
+			    Write-Host "Got HBA $DeviceName Firmware $FirmwareString and Driver: $DriverString"
 			}
 		
 		    #Handle Local Storage Controllers - Get Installed Drivers and Firmware information -T.B.D
-		    elseif ($device.DeviceClass -eq "MassStorageController")
-		    {
-			    #write-host "MassStorageController" #T.B.D
-		    }  
-		    $AllInfo += $Info
+		    #elseif ($device.DeviceClass -eq "MassStorageController")
+		    #{
+			#    #write-host "MassStorageController" #T.B.D
+		    #}  
+            
+            if ($info.device -ne $null)
+            {
+		        $AllInfo += $Info
+            }
 	    }
     }
     return $AllInfo
@@ -467,143 +342,48 @@ Function _GetDeviceList ($esxhost)
 
 Function _CheckDeviceOnline ($DeviceList, $OfflineHCL)
 {
-	$AllInfoWithSupport = @()	
-	foreach ($Info in $DeviceList)	
+	$AllDevicesWithSupport = @()	
+	foreach ($device in $DeviceList)	
     {
-		# Check if Firmware and Drivers are supported according to VMWare Official I/O Devices Compatibility Matrix : https://www.vmware.com/resources/compatibility/search.php?deviceCategory=io
-		$Info.Supported = $false
-		foreach ($EntryReference in $EntriesArray)
-		{
-			$ProductCompatCsvArr = @()
-			if (!$OfflineHCL)
-			{
-				$ProductIdWebUrl = $EntryReference
-				$ProductIdWebContent = Invoke-WebRequest "$ProductIdWebUrl"
-				$ProductCompatCsv = $ProductIdWebContent.content -split "Release,Device Driver\(s\),Firmware Version,Additional Firmware Version,Driver Type,Driver Model,Footnotes,Feature Category,Features" | select -last 1
-				$ProductCompatCsv = $ProductCompatCsv  -split('" /></form') | select -first 1
-				$ProductCompatCsvArr = $ProductCompatCsv.split("`n")
-			}
+        $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+        $headers.Add("Accept", "*/*")
+        $headers.Add("Accept-Encoding", "application/gzip, deflate, br")
+        #$headers.Add("Connection", "keep-alive")
+        $headers.Add("x-api-key", "SJyb8QjK2L")
+        $headers.Add("x-api-toolid", "180209100001")
+        $headers.Add("x-request-id", "8f90e8af-4821-4159-aad2-f360533ab2e2")
+        $headers.Add("Cookie", "vdc-cookie=!RugicSNTG0EN4P36Re7Y1j0kh+zwSVQ64eyLh0Z4957C/vk8HLqvMEUNxqMAk/gjZVYHVqHvlZMWyA==")
 
-			#$device.VMhost.ExtensionData.Config.Product.version #6.5.0 (even if its update 1)
-			#$device.VMhost.ExtensionData.Config.Product.apiVersion # 6.5
-			
-		
-			$InfoSupportedDriverVersion = ""
-			$InfoSupportedFirmwareVersion = ""
-			$InfoSupportedESXRelease= ""
-			$InfoSuggestedDriver = ""
-			$InfoSuggestedFirmware = ""
-			Foreach($Line in $ProductCompatCsvArr )
-			{
-				$SupportedESXRelease = $line.split(",")[0]
-				#write-host "Supported Release : $SupportedESXRelease "
-				if ($InfoSupportedESXRelease -NotLike "*$SupportedESXRelease;*")
-				{
-					$InfoSupportedESXRelease += $SupportedESXRelease + ";"
-				}
-				if ($SupportedESXRelease -like "*$ESXRelease*")
-				{
-					#write-host "found ESX release! checking drivers and firmware.."
-					$SupportedDriverVersion = $line.split(",")[1]
-					$SupportedFirmwareVersion = $line.split(",")[2].replace("x","")
-					$InfoSupportedDriverVersion += $SupportedDriverVersion + ";"
-					$InfoSupportedFirmwareVersion += $SupportedFirmwareVersion + ";"
-					#write-host "Checking if firmware supported : $SupportedFirmwareVersion 		to current : " $Info.FirmwareVersion
-					#write-host "Checking if driver   supported : $SupportedDriverVersion 		to current : " $Info.DriverVersion
-					
-					$InfoDriverVerion = $Info.DriverVersion
-					$infoFirmwareVersion = $info.FirmwareVersion
-					if ($SupportedFirmwareVersion -ne "N/A")
-					{
-						$SupportedFirmwareVersionArr=$SupportedFirmwareVersion.split("/") 
-					}
-					$InfoDriverVerion = $InfoDriverVerion  -replace '(^\s+)','' -replace '(\s+$)','' -replace '\s+','' -replace '\s',''  #Removes spaces for comparison 
-					
-					if ($InfoSuggestedFirmware -eq "")
-					{
-						foreach ($obj in $SupportedFirmwareVersionArr)
-						{
-							if ($obj -ne "N/A")
-							{
-								$InfoSuggestedFirmware = $obj
-								break;
-							}
-						}
-					}
-					foreach ($tempSupportedFirmwareVersion in $SupportedFirmwareVersionArr)
-					{
-						$isGreaterVer = $False 
-						for ($i=0; $i -lt $InfoSuggestedFirmware.split(".").length ; $i++ )
-						{
-							try 
-							{
-								if (([int]$tempSupportedFirmwareVersion.split(".")[$i] -gt [int]$InfoSuggestedFirmware.split(".")[$i]) -or ([int]$tempSupportedFirmwareVersion.split(".")[$i] -eq [int]$InfoSuggestedFirmware.split(".")[$i]))
-								{
-									$isGreaterVer = $True
-								}
-								else
-								{
-									$isGreaterVer = $False
-									break
-								}
-							}
-							Catch
-							{
-								$isGreaterVer = $False
-								break
-							}
-						}
-						
-						if ($isGreaterVer -eq $True)
-						{
-							$InfoSuggestedFirmware = $tempSupportedFirmwareVersion
-							$InfoSuggestedDriver = $SupportedDriverVersion
-						}
-						#write-host "Comparing firmware version " + $infoFirmwareVersion + " to supported firmware version " + $tempSupportedFirmwareVersion
-						if (($infoFirmwareVersion -like "*$tempSupportedFirmwareVersion*") -or ($tempSupportedFirmwareVersion -like "*$infoFirmwareVersion*"))
-						{	
-							#write-host "Firmware is compatible, checking driver.."
-							#write-host "Comparing driver version $InfoDriverVerion to supported driver version =="$SupportedDriverVersion"=="
-							if (($InfoDriverVerion -like "*$SupportedDriverVersion*") -or ($SupportedDriverVersion -like "*$InfoDriverVerion*")) 
-							{
-								#write-host "FOUND SUPPORTED VERSION! DRIVER $SupportedDriverVersion $tempSupportedFirmwareVersion"
-								$Info.Supported = $true
-								break
-							}
-						}
-					}
-					if ($Info.Supported -eq $true)
-					{
-						break
-					}
-				}
-			}
-			if ($Info.Supported -eq $true)
-			{
-				break
-			}
-		}
-		if ($info.Supported -eq $false)
-		{
-			$Info.RecommendedDriverVersion = $InfoSuggestedDriver 
-			$Info.RecommendedFirmwareVersion = $InfoSuggestedFirmware
-			$Info.RecommendedESXRelease = $ESXRelease
-		}
-        $AllInfoWithSupport += $Info
-    }
-    return $AllInfoWithSupport
-}
+        $response = Invoke-RestMethod "https://apigw.vmware.com/m4/compatibility/v1/compatible/iodevices/search?vid=0x$($device.vid)&did=0x$($device.did)&svid=0x$($device.svid)&ssid=0x$($device.ssid)&releaseversion=$($device.releaseversion)&driver=$($device.driver)&driverversion=$($device.driverversion)&firmware=$($device.firmwareversion)" -Method 'GET' -Headers $headers -Body $body
 
-Function _RevertSSH ($HostsSSHServices)
-{
-    ##Stopping SSH Services
-    foreach ($HostSSHService in $HostsSSHServices)
-    {
-	    if ($HostSSHService.Running -eq $false)
-	    {
-		    $HostSSHService | Stop-VMHostService
-	    }
+        $device.supported = $response.searchResult.status
+
+        $matches = new-object system.collections.arraylist
+        if ($response.matches -ne $null)
+        {
+            $PotentialMatches = $response.matches
+        }
+        else
+        {
+            $PotentialMatches = $response.potentialMatches
+        }
+
+        foreach ($match in $PotentialMatches)
+        {
+            $matches.add($match.vcgLink) > $null
+        }
+
+        $device.reference = $matches -join (";")
+
+        $device.DeviceWarnings = $response.searchResult.warnings -join ";"
+        if ($device.DeviceWarnings)
+        {
+            $device.supported = "Not Compatible"
+        }
+        $AllDevicesWithSupport += $device
     }
+    return $AllDevicesWithSupport
+
 }
 
 Function _ExportToFiles ($ExportInfo)
@@ -673,46 +453,30 @@ Function _ExportToFiles ($ExportInfo)
 
 Function _GetServerList ($esxhost)
 {
-    <#
-      .NOTES
-      Author: Florian Grehl - www.virten.net
-      Reference: http://www.virten.net/2016/05/vmware-hcl-in-json-format/
-  
-      .DESCRIPTION
-      Verifies server hardware against VMware HCL.
-      This script uses a JSON based VMware HCL maintained by www.virten.net.
-      Works well with HP and Dell. Works acceptable with IBM and Cisco.
-  
-      Many vendors do not use the same model string in VMware HCL and Server BIOS Information.
-      Server may then falsely be reported as unsupported.
-
-      .EXAMPLE
-      Check-HCL 
-    #>
-	if (!$ServerEsxiReleases)
-	{	
-		if (!$OfflineServerEsxiReleases)
-		{
-			$global:ServerEsxiReleases = Invoke-WebRequest -Uri http://www.virten.net/repo/esxiReleases.json | ConvertFrom-Json
-		}
-		else
-		{
-			$global:ServerEsxiReleases = Get-Content $OfflineServerEsxiReleases | convertfrom-json
-		}
-	}
-    if (!$OfflineServerHclJson)
-    {
-        $ServerHclJson = Invoke-WebRequest -Uri http://www.virten.net/repo/vmware-hcl.json
-        [void][System.Reflection.Assembly]::LoadWithPartialName("System.Web.Extensions")        
-        $jsonserializer= New-Object -TypeName System.Web.Script.Serialization.JavaScriptSerializer 
-        $jsonserializer.MaxJsonLength = [int]::MaxValue
-        $hcl = $jsonserializer.DeserializeObject($ServerHclJson)
-    }
-    else
-    {
-        $ServerHclJson = Get-Content $OfflineServerHclJson | convertfrom-json
-        $hcl = $ServerHclJson 
-    }
+#	if (!$ServerEsxiReleases)
+#	{	
+#		if (!$OfflineServerEsxiReleases)
+#		{
+#			$global:ServerEsxiReleases = Invoke-WebRequest -Uri http://www.virten.net/repo/esxiReleases.json | ConvertFrom-Json
+#		}
+#		else
+#		{
+#			$global:ServerEsxiReleases = Get-Content $OfflineServerEsxiReleases | convertfrom-json
+#		}
+#	}
+#    if (!$OfflineServerHclJson)
+#    {
+#        $ServerHclJson = Invoke-WebRequest -Uri http://www.virten.net/repo/vmware-hcl.json
+#        [void][System.Reflection.Assembly]::LoadWithPartialName("System.Web.Extensions")        
+#        $jsonserializer= New-Object -TypeName System.Web.Script.Serialization.JavaScriptSerializer 
+#        $jsonserializer.MaxJsonLength = [int]::MaxValue
+#        $hcl = $jsonserializer.DeserializeObject($ServerHclJson)
+#    }
+#    else
+#    {
+#        $ServerHclJson = Get-Content $OfflineServerHclJson | convertfrom-json
+#        $hcl = $ServerHclJson 
+#    }
 
 	if ($Location)
 	{
@@ -740,117 +504,80 @@ Function _GetServerList ($esxhost)
         $Info.BiosVersion = $view.BIOSVersion
         $Info.BiosReleaseDate = $view.BIOSDate
     
-        $release = $ServerEsxiReleases.data.esxiReleases |? build -eq $vmHost.Build
-        if($release) 
+        #Get ESXi Host Version
+		$esxcliv1 = $vmhost | get-esxcli
+		$ESXVersionArr =$esxcliv1.system.version.get().version.split(".")
+		$ESXVersion =  $ESXVersionArr[0] + "." + $ESXVersionArr[1]
+		$ESXUpdate = $esxcliv1.system.version.get().update
+		if (($ESXUpdate -ne "0") -or ($ESXUpdate -eq $null))
+		{
+			$Info.ReleaseLevel = $ESXVersion +  " U" + $ESXUpdate
+		}
+		else
+		{
+			$Info.ReleaseLevel = $ESXVersion
+		
+        }
+
+ 
+        $Data = @()
+
+        $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+		$headers.Add("Accept", "*/*")
+		$headers.Add("Accept-Encoding", "application/gzip, deflate, br")
+	#	$headers.Add("Connection", "keep-alive")
+		$headers.Add("x-api-key", "SJyb8QjK2L")
+		$headers.Add("x-api-toolid", "180209100001")
+		$headers.Add("x-request-id", "64c7522b-be59-445e-b45c-504dda7a6107")
+
+		$model=$Info.Model #"ProLiant DL325 Gen10 Plus" 
+        $releaseversion=$Info.ReleaseLevel #"6.7 U3"
+        if ($releaseversion -match "ESXi ")
         {
-            $updateRelease = $($release.updateRelease)
-            $Info.ReleaseLevel = $updateRelease
-        } 
+            $releaseversion.trim("ESXi ")
+        }
+		$vendor=$Info.Manufacturer #"HPE"
+        $cpuFeatureId= $vmhost.ExtensionData.Hardware.CpuFeature[1].Eax
+        if (($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease) -and ($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease))
+        {
+            $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)_$($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease).$($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease)"
+        }
         else
         {
-            $updateRelease = $false
-            $Info.Note = "ESXi Build $($vmHost.Build) not found in database." 
-        } 
-        $Data = @()
-        Foreach ($server in $hcl.data.server) 
+            $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)"
+        }
+		$response = Invoke-RestMethod "https://apigw.vmware.com/m4/compatibility/v1/compatible/servers/search?model=$model+&releaseversion=$releaseversion&vendor=$vendor&bios=$bios&cpuFeatureId=$cpuFeatureId" -Method 'GET' -Headers $headers
+		$response | ConvertTo-Json		
+
+        $Info.Note = $response.searchResult.warnings -join ";" 
+		$Info.SupportedReleases = ""
+        if ($response.potentialMatches.length -gt 0)
         {
-            $ModelFound = $false
-            if ($HostModel.StartsWith("UCS") -and $ModelMatch.Contains("UCS"))
+            $potentialMatches = $response.potentialMatches
+        }
+        else
+        {
+            $potentialMatches = $response.matches
+        }
+
+        $Info.Supported = "Not Compatible"
+        $references = new-object system.collections.arraylist
+        foreach ($potentialMatch in $potentialMatches)
+        {
+            $references.Add($potentialMatch.vcgLink)
+            foreach ($BiosFeatures in $potentialMatch.features)
             {
-                $HostLen=$HostModel.Length
-                $UCS_MODEL=$HostModel.Substring(5,4)
-                if ($HostLen -eq 12) 
+                if ($BiosFeatures.bios -cmatch $bios)
                 {
-                    $UCS_GEN=$HostModel.Substring(10,2)
+                    $Info.Supported = "Compatible"
                 }
-                if ($HostLen -eq 14) 
-                {
-                    $UCS_GEN=$HostModel.Substring(10,3)
-                }
-                $isUCSMODEL=$ModelMatch.Contains($UCS_MODEL)
-                if ($isUCSMODEL -eq "True") 
-                {
-                    $isUCSGEN=$ModelMatch.Contains($UCS_GEN)
-                    if ($isUCSGEN -eq "True") 
-                    {
-                        $ModelFound = $true
-                    }
-                }
-            }
-            $ModelMatch = $server.model 
-            $ModelMatch = $ModelMatch -replace "IBM ",""
-            $ModelMatch = ("*"+$ModelMatch+"*")
-            if ($HostManuf -eq "HP")
-            {
-                If ($HostModel -like $ModelMatch -and $server.manufacturer -eq $HostManuf) 
-                { 
-                    $ModelFound = $true
-                }
-            } 
-            else 
-            {
-                If ($HostModel -like $ModelMatch) 
-                { 
-                    $ModelFound = $true
-                }
-            }
-            If ($ModelFound) 
-            { 
-                If($server.cpuSeries -like "Intel Xeon*")
-                {
-                    $cpuSeriesMatch = $server.cpuSeries -replace "Intel Xeon ","" -replace " Series","" -replace "00","??" -replace "xx","??" -replace "-v"," v"
-                    $HostCpuMatch = $HostCpu -replace " 0 @"," @" -replace "- ","-" -replace "  "," "
-                    $cpuSeriesMatch = ("*"+$cpuSeriesMatch+" @*")
-                    if ($HostCpuMatch -notlike $cpuSeriesMatch)
-                    {
-                        continue
-                    }
-                }
-                $helper = New-Object PSObject
-                Add-Member -InputObject $helper -MemberType NoteProperty -Name Model $server.model
-                Add-Member -InputObject $helper -MemberType NoteProperty -Name CPU $server.cpuSeries
-                Add-Member -InputObject $helper -MemberType NoteProperty -Name Releases $server.releases
-                Add-Member -InputObject $helper -MemberType NoteProperty -Name URL $server.url
-                $Data += $helper
             }
         }
-    
-        If ($Data.Count -eq 1)
-        {
-            Foreach ($obj in $Data) 
-            {
-                $release = $ServerEsxiReleases.data.esxiReleases |? build -eq $vmHost.Build
-                if ($updateRelease -and ($obj.Releases -contains $updateRelease))
-                {
-                    $Info.Supported = $true
-                } 
-                else 
-                {
-                    $Info.Supported = $false
-                }
-                $Info.SupportedReleases = $obj.Releases
-                $Info.Reference = $($obj.url)
-            }
-        } 
-        elseif ($Data.Count -gt 1)
-        {
-			$references = ""
-			Foreach ($obj in $Data) 
-            {
-				$references = $references + $($obj.url)
-				$Info.Note = "More than 2 HCL Entries found." 
-			}
-			$Info.Reference = $($obj.url)
-        } 
-        else 
-        {
-            $Info.supported = $false
-            $Info.Note = "No HCL Entries found." 
-        }
+        $info.reference = $references -join ";"
+        
+
         $AllServerInfo += $Info
     }
-
-
     write-host $AllServerInfo
 
     return $AllServerInfo
@@ -866,9 +593,9 @@ Function _CheckServerOnline ($ServerList)
 Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
 {
     $FinalList = @()
-    foreach ($device in $DeviceListWithSupport)
+    foreach ($device in $DeviceListWithSupport) 
     {
-        $Line = "" | Select Parent, VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, BiosVersion, BiosReleaseDate, ServerCpu, ServerSupported, ServerSupportedReleases, ServerReference, ServerNote, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,RecommendedDriverVersion, RecommendedFirmwareVersion, RecommendedESXRelease, Reference
+        $Line = "" | Select Parent, VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, BiosVersion, BiosReleaseDate, ServerCpu, ServerSupported, ServerSupportedReleases, ServerReference, ServerNote, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,DeviceWarnings, Reference
         #$Info = "" | Select Parent, VMHost, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, 
         #FirmwareVersion, VibVersion, Supported,RecommendedDriverVersion, RecommendedFirmwareVersion, RecommendedESXRelease, Reference
         #$Info = "" | Select VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, ServerCpu, ServerSupported, ServerSupportedReleases, ServerReference, ServerNote
@@ -903,9 +630,7 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
                 $Line.FirmwareVersion = $Device.FirmwareVersion
                 $Line.VibVersion = $Device.VibVersion
                 $Line.Supported = $Device.Supported
-                $Line.RecommendedDriverVersion = $Device.RecommendedDriverVersion
-                $Line.RecommendedFirmwareVersion = $Device.RecommendedFirmwareVersion
-                $Line.RecommendedESXRelease = $Device.RecommendedESXRelease
+                $Line.DeviceWarnings = $Device.DeviceWarnings
                 $Line.Reference = $Device.Reference
                 $lineFound = $true
                 break
@@ -918,46 +643,109 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
 
 function _ExecuteConfigurationReport ($esxHostName)
 {
-   # _ConnectVC $esxHostName $esxUsername $esxPassword
-    $Report = _GetClustersStatus $esxHostName $esxUsername $esxPassword 
-   # Disconnect-VIServer * -Force -Confirm:$false 
+    $Report = _GetClustersStatus $esxHostName $esxUsername $esxPassword  
     return $Report
 }
 function _ExecuteHardwareReport ($esxHostName)
 {
     ## Run all functions
-    #_ConnectVC $esxHostName $esxUsername $esxPassword
-    $hcl = _GetHCL 
-    #$HostsSSHServices = _EnableSSH
-
     $ServerList = _GetServerList $esxHostName
     $ServerListWithSupport = _CheckServerOnline $ServerList
 
     $DeviceList = _GetDeviceList $esxHostName
     $DeviceListWithSupport = _CheckDeviceOnline $DeviceList $OfflineHCL
 
-
     $FinalList = _MergeLists $ServerListWithSupport $DeviceListWithSupport
-    #_RevertSSH $HostsSSHServices
-    #Disconnect-VIServer * -Force -Confirm:$false 
     return $FinalList
 }
 
-function _SendMail($emailTo)
+function _SendMail($emailTo, $emailSubject, $emailBody)
 {
-	
-	Send-MailMessage -SmtpServer $smtpServer -from $fromAddr -to $emailTo -Subject "New ESX(s) joined the vCenter" -Body  "New ESX joined the vCenter" -Attachments .\logs\esxHardwareReport_$logdate.csv, .\logs\esxConfigurationReport_$logdate.csv
-
+	write-host "Sending address $emailTo with body:  `n $emailBody"
+	[string[]]$To = $emailTo.Split(',')
+	Send-MailMessage -SmtpServer $smtpServer -from $fromAddr -to $To -Subject $emailSubject -Body  $emailBody -Attachments .\logs\esxHardwareReport_$logdate.csv, .\logs\esxConfigurationReport_$logdate.csv
 }
 
+
+function _ConfCompareToCsv ($esxConfigurationReport, $esxHardwareReport)
+{
+	foreach ($esxConfiguration in $esxConfigurationReport)
+	{
+        Write-Host "Comparing $esxConfiguration to local CSV"
+        $isRecordFound = $false
+
+        # Searching for cluster
+        $ESXConfigurationCsv = $ClusterConfigurationCsv | Where-Object {$_.Cluster -eq $esxConfiguration.cluster}
+        if ($ESXConfigurationCsv -eq $null)
+        {
+            $ESXConfigurationCsv = $ClusterConfigurationCsv | Where-Object {$_.Cluster -eq "default"}
+        }
+
+        # Check conf             
+        if (($esxConfiguration.isHAActive -ne $ESXConfigurationCsv.isHAActive) -or ($esxConfiguration.HAFailoverLevel -ne $ESXConfigurationCsv.HAFailoverLevel))
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " HA mismatch"
+        }
+        
+        if (($esxConfiguration.DRSMode -ne $ESXConfigurationCsv.DRSMode) -or ($esxConfiguration.isDRSActive -ne $ESXConfigurationCsv.isDRSActive))
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi  + " DRS mismatch"
+        }
+        
+        if ($esxConfiguration.ClusterEVCMode -ne $esxConfiguration.ClusterEVCMode)
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " EVC mismatch"
+        }
+        
+        if ($esxConfiguration.ScratchConfig -notlike   "/vmfs/volumes/*")
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " Scratch Partition mismatch"
+        }
+        
+        if ($esxConfiguration.SyslogConfig -ne $ESXConfigurationCsv.SyslogConfig )
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi +  " Syslog mismatch"
+        }
+        
+        if (($esxConfiguration.isNTPConfigured  -ne $ESXConfigurationCsv.isNTPConfigured ) -or ($esxConfiguration.isNTPRunning  -ne $ESXConfigurationCsv.isNTPRunning) )
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " NTP mismatch"
+        }
+		if ($esxConfiguration.vmk0_Portgroup.toLower().indexOf("esxi management 180") -eq -1 ) 
+        {
+            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " Portgroup mismatch"
+        }
+        
+	}
+
+	foreach ($esxHardware in $esxHardwareReport)
+	{
+		if ($esxHardware.Supported -ne "Compatible")
+		{
+			$Gaps =  $Gaps + "`n Host " +$esxHardware.VMHost + " device " + $esxHardware.Device + " driver-firmware mismatch"
+		}
+		if ($esxHardware.ServerSupported -ne "Compatible")
+		{
+            if ($gaps -notmatch "Host " +$esxHardware.VMHost + " Host version mismatch")
+            {
+			    $Gaps =  $Gaps + "`n Host " +$esxHardware.VMHost + " Host version mismatch"
+            }
+		}
+	}	
+    if ($Gaps)
+    {
+        $Gaps = "ESXi hosts differences found:" + $Gaps
+    }
+
+    return $Gaps
+}
 function _Main
 {
 	########### MAIN ############
 
-	#cd "C:\ESXReportScript"
-
 	# Get VC and ESX credentials from file
 	$credentials = Import-Clixml .\esxReportDataCRD.xml
+	$ClusterConfigurationCsv = Import-Csv .\ClusterConfiguration.csv 
 	
 	$vCenterServer = $credentials.VcName
 	$smtpServer = $credentials.SmtpServer
@@ -985,7 +773,7 @@ function _Main
 		$xmltmparr = Import-Clixml -Path "esxReportData.xml"
 		for($i = 0 ; $i -lt $xmltmparr.length; $i++)
 		{
-			$xml.Add($xmltmparr[$i])
+			$xml.Add($xmltmparr[$i]) > $null
 		}
 	}
 	catch
@@ -1004,7 +792,15 @@ function _Main
 		$ServerIdXml = $null
 		$ServerIdXml = $xml | where {$_.ServerId -eq $esxhost.id}
 
-		if ((!$ServerIdXml) ) # -or ($InstalledDate -lt $LastRunTime)
+		## Get ESXi install date and current date for comparison 
+		$Date = get-date 
+		$esxcli = $esxhost | Get-EsxCli -v2
+		$epoch = $esxcli.system.uuid.get.Invoke().Split('-')[0]
+		$EsxInstalledDate = [timezone]::CurrentTimeZone.ToUniversalTime(([datetime]'1/1/1970').AddSeconds([int]"0x$($epoch)"))
+
+		$timespan = $Date - $EsxInstalledDate
+		
+		if ((!$ServerIdXml) -and ($timespan.totalminutes -gt 60))
 		{
 			$hostsToExecute += $esxhost
 		}
@@ -1019,8 +815,6 @@ function _Main
 	$i=1
 	foreach ($hostToExecute in $hostsToExecute)
 	{
-
-
 		write-host "Getting esxcli v2 on host $esxhost"	
 		$esxcli = $hostToExecute | Get-EsxCli -v2
 		$epoch = $esxcli.system.uuid.get.Invoke().Split('-')[0]
@@ -1068,7 +862,7 @@ function _Main
 		$xmlConftmparr = Import-Clixml -Path "esxConfReportData.xml"
 		for($i = 0 ; $i -lt $xmlConftmparr.length; $i++)
 		{
-			$xmlConf.Add($xmlConftmparr[$i])
+			$xmlConf.Add($xmlConftmparr[$i]) > $null
 		}
 	}
 	catch
@@ -1079,7 +873,7 @@ function _Main
 
 	for ($i=0 ; $i -lt $esxConfigurationReport.Length ; $i++)
 	{
-		$xmlConf.Add($esxConfigurationReport[$i])
+		$xmlConf.Add($esxConfigurationReport[$i]) > $null
 	}
 	$xmlConf | Export-Clixml "esxConfReportData.xml"
 
@@ -1091,7 +885,7 @@ function _Main
 		$xmlHardwaretmparr = Import-Clixml -Path "esxHardwareReportData.xml"
 		for($i = 0 ; $i -lt $xmlHardwaretmparr.length; $i++)
 		{
-			$xmlHardware.Add($xmlHardwaretmparr[$i])
+			$xmlHardware.Add($xmlHardwaretmparr[$i]) > $null
 		}
 	}
 	catch
@@ -1102,15 +896,12 @@ function _Main
 
 	for ($i=0 ; $i -lt $esxHardwareReport.Length ; $i++)
 	{
-		$xmlHardware.Add($esxHardwareReport[$i])
+		$xmlHardware.Add($esxHardwareReport[$i]) > $null
 	}
 	$xmlHardware | Export-Clixml "esxHardwareReportData.xml"
 
-
 	Write-Host "############# Saving Metadata for next runs #############"
 	$xml | Export-Clixml "esxReportData.xml"
-
-
 
 	Write-Host "############# Preparing email with the new ESXi host details #############"
 
@@ -1118,14 +909,24 @@ function _Main
 	$esxHardwareReport	  | Export-Csv -NoTypeInformation ".\logs\esxHardwareReport_$logdate.csv"
 	$esxConfigurationReport | Export-Csv  -NoTypeInformation ".\logs\esxConfigurationReport_$logdate.csv"
 
-
 	if ($esxHardwareReport.Length -gt 0)
 	{
-		_SendMail $toAddress
+    
+	    Write-Host "Comparing list to its defaults"
+	    $esxConfigurationReportDifferences = _ConfCompareToCsv $esxConfigurationReport $esxHardwareReport
+        
+        if ($esxConfigurationReportDifferences)
+        {
+			$emailSubject = "ESXi hosts configuration differences"
+		    _SendMail $toAddress $emailSubject $esxConfigurationReportDifferences
+        }
+		else
+		{
+			$emailSubject = "New ESXi hosts joined the vCenter"
+			$emailBody = "New ESXi hosts joined the vCenter"
+			_SendMail $toAddress $emailSubject $emailBody
+		}
 	}
-
-
-	
 }
 
 
