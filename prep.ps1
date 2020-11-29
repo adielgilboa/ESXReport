@@ -9,7 +9,6 @@ $toAddr = $toAddr.split(",")
 
 
 $myObject = New-Object -TypeName psobject
-$myObject | Add-Member -MemberType NoteProperty -Name EsxCredentials -Value $esxCred
 $myObject | Add-Member -MemberType NoteProperty -Name VcCredentials -Value $vcenterPassword
 $myObject | Add-Member -MemberType NoteProperty -Name VcName -Value $vcname
 $myObject | Add-Member -MemberType NoteProperty -Name SmtpServer -Value $smtpServer

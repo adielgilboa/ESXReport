@@ -60,11 +60,9 @@ function _GetVmnicPortgroupName ($vNic)
 }
 
 
-function _GetClustersStatus ($vcServer, $Username, $Password, $Location )
+function _ExecuteConfigurationReport ($vcServer, $Location )
 {
     $AllInfo = @()
-
-   # _ConnectVC $vcServer $Username $Password
 
     if ($global:DefaultVIServers.length -ne 1)
     {
@@ -88,13 +86,11 @@ function _GetClustersStatus ($vcServer, $Username, $Password, $Location )
         foreach ($ESXhost in $ESXhosts)
         {
             $Info = "" | Select Cluster,ESXi,isDRSActive,DRSMode,isHAActive,HAFailoverLevel,ClusterEVCMode,ESXMaximumCompatibleEVCMode,ScratchConfig,SyslogConfig,isNTPConfigured,isNTPRunning,vmk0_IP,vmk0_Portgroup,vmk0_MTU,vmk0_Netstack,vmk0_ServicesStatus,vmk1_IP,vmk1_Portgroup,vmk1_MTU,vmk1_Netstack,vmk1_ServicesStatus,vmk2_IP,vmk2_Portgroup,vmk2_MTU,vmk2_Netstack,vmk2_ServicesStatus,vmk3_IP,vmk3_Portgroup,vmk3_MTU,vmk3_Netstack,vmk3_ServicesStatus
-            #write-host "adding row " + $ESXhost.name 
             $ScratchLocation = ""
             $ScratchLocation = $advSettingsScratch | Where-Object {$_.entity.id -eq $ESXhost.id} |select -ExpandProperty value 
             $SyslogHost = ""
             $SyslogHost = $advSettingsSyslog | Where-Object {$_.entity.id -eq $ESXhost.id} |select -ExpandProperty value 
 
-           # $ESXHostVmknics = _GetEsxVmnicSpecObj $ESXhost
             $ESXHostAdapters = $ESXhost | Get-VMHostNetworkAdapter 
             $vmk0Services = $ESXHostAdapters |where {$_.DeviceName -eq "vmk0"} | select VMotionEnabled,FaultToleranceLoggingEnabled,ManagementTrafficEnabled,VsanTrafficEnabled,DhcpEnabled
             $vmk1Services = $ESXHostAdapters |where {$_.DeviceName -eq "vmk1"} | select VMotionEnabled,FaultToleranceLoggingEnabled,ManagementTrafficEnabled,VsanTrafficEnabled,DhcpEnabled
@@ -151,13 +147,6 @@ Function _ConnectVIServer ($vCenterHost)
     $vCenterUsername = $vCenterCredentials.UserName
     $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($vCenterCredentials.Password)
     $vCenterPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-    if (!$ESXCredentials)
-    {
-        $ESXCredentials = get-credential -Message "ESX root Username and Password" -UserName root
-    }
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($ESXCredentials.Password)
-    $global:UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-
 
     Import-Module "VMware.PowerCLI" -ErrorAction SilentlyContinue | out-null
     Get-Module -ListAvailable | where {$_.Name -like "VMware*"} | Import-Module -ErrorAction SilentlyContinue | out-null
@@ -641,11 +630,7 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
     return $FinalList
 }
 
-function _ExecuteConfigurationReport ($esxHostName)
-{
-    $Report = _GetClustersStatus $esxHostName $esxUsername $esxPassword  
-    return $Report
-}
+
 function _ExecuteHardwareReport ($esxHostName)
 {
     ## Run all functions
@@ -752,10 +737,6 @@ function _Main
 	$fromAddr = $credentials.fromAddr
 	$toAddress = $credentials.toAddr 
 	
-	$esxUsername = $credentials.EsxCredentials.UserName 
-	$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($credentials.EsxCredentials.Password)
-	$global:esxPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-
 	$vcUsername =  $credentials.VcCredentials.UserName  
 	$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($credentials.VcCredentials.Password)
 	$global:vcPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
