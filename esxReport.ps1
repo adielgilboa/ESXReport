@@ -421,7 +421,6 @@ Function _GetServerList ($esxhost)
         $Info.Cpu = $HostCpu
 
         $View = Get-View $vmHost | Select @{N="BIOSVersion";E={$_.Hardware.BiosInfo.BiosVersion}},@{N="BIOSDate";E={$_.Hardware.BiosInfo.releaseDate}}
-        $Info.BiosVersion = $view.BIOSVersion
         $Info.BiosReleaseDate = $view.BIOSDate
     
         #Get ESXi Host Version
@@ -465,6 +464,7 @@ Function _GetServerList ($esxhost)
         {
             $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)"
         }
+		$Info.BiosVersion = $bios
 		$response = Invoke-RestMethod "https://apigw.vmware.com/m4/compatibility/v1/compatible/servers/search?model=$model+&releaseversion=$releaseversion&vendor=$vendor&bios=$bios&cpuFeatureId=$cpuFeatureId" -Method 'GET' -Headers $headers
 		$response | ConvertTo-Json		
 
