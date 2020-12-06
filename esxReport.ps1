@@ -504,7 +504,7 @@ Function _GetServerList ($esxhost)
             $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)"
         }
 		$Info.BiosVersion = $bios
-		$response = Invoke-RestMethod "https://apigw.vmware.com/m4/compatibility/v1/compatible/servers/search?model=$model+&releaseversion=$releaseversion&vendor=$vendor&bios=$bios&cpuFeatureId=$cpuFeatureId" -Method 'GET' -Headers $headers
+		$response = Invoke-RestMethod "https://apigw.vmware.com/m4/compatibility/v1/compatible/servers/search?model=$model&releaseversion=$releaseversion&vendor=$vendor&bios=$bios&cpuFeatureId=$cpuFeatureId" -Method 'GET' -Headers $headers
 		$response | ConvertTo-Json		
 
         $Info.Note = $response.searchResult.warnings -join ";" 
