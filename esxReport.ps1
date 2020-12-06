@@ -258,7 +258,10 @@ Function _GetDeviceList ($esxhost)
 				    }
 				    Catch
 				    {
-					    $vibname = $vmhbaId.Driver.replace("_","-")
+						if ($vmhbaId.Driver.Contains("_") )
+						{
+							$vibname = $vmhbaId.Driver.replace("_","-")
+						}
 					    $driverVib = $esxcli.software.vib.get.Invoke(@{vibname = $vibname})
 				    }
 			    }
@@ -307,33 +310,69 @@ Function _CheckDeviceOnline ($DeviceList, $OfflineHCL)
         $headers.Add("x-api-toolid", "180209100001")
         $headers.Add("x-request-id", "8f90e8af-4821-4159-aad2-f360533ab2e2")
         $headers.Add("Cookie", "vdc-cookie=!RugicSNTG0EN4P36Re7Y1j0kh+zwSVQ64eyLh0Z4957C/vk8HLqvMEUNxqMAk/gjZVYHVqHvlZMWyA==")
-
-        $response = Invoke-RestMethod "https://apigw.vmware.com/m4/compatibility/v1/compatible/iodevices/search?vid=0x$($device.vid)&did=0x$($device.did)&svid=0x$($device.svid)&ssid=0x$($device.ssid)&releaseversion=$($device.releaseversion)&driver=$($device.driver)&driverversion=$($device.driverversion)&firmware=$($device.firmwareversion)" -Method 'GET' -Headers $headers -Body $body
-
-        $device.supported = $response.searchResult.status
+		$url = "https://apigw.vmware.com/m4/compatibility/v1/compatible/iodevices/search?vid=0x$($device.vid)&did=0x$($device.did)&svid=0x$($device.svid)&ssid=0x$($device.ssid)&releaseversion=$($device.VMHostVersion)&driver=$($device.driver)&driverversion=$($device.driverversion)" # &firmware=$($device.firmwareversion)
+		write-host "Host $($device.vmhost.name) device $($device.DeviceName) Checking device with URL: "
+		write-host "$url"
+        $response = Invoke-RestMethod $url -Method 'GET' -Headers $headers -Body $body
+		$potentialMatches = @()
 
         $matches = new-object system.collections.arraylist
-        if ($response.matches -ne $null)
+		
+        if ($response.potentialMatches.length -gt 0)
         {
-            $PotentialMatches = $response.matches
+            $potentialMatches = $response.potentialMatches
         }
         else
         {
-            $PotentialMatches = $response.potentialMatches
+            $potentialMatches = $response.matches
         }
 
+		$device.Supported = "Not Compatible"
         foreach ($match in $PotentialMatches)
         {
+			
             $matches.add($match.vcgLink) > $null
+			if ($match.features -is [array])
+			{
+				$matchFeatures = $match.features
+			}
+			else
+			{
+				$members =  $match.features | Get-Member |where {$_.MemberType -eq "NoteProperty"}
+				$matchFeatures = @()
+				write-host "DEBUG - got members: $($members.name)"
+				foreach ($member in $members)
+				{
+					$matchFeatures += $match.features.($member.name)
+				}
+			}
+            foreach ($AdapterFeatures in $matchFeatures)
+            {
+				
+				$driverVersion = $device.driverversion
+				# Getting the firmware version as major and minor only. (example:  "mfw 8.50.9.0 storm 8.38.2.0" is compared as 8.50 and 8.38)
+				$firmwareVersions = $device.firmwareversion.split(" ") | Select-String -Pattern [0-9]*\.[0-9]* -List
+				
+				foreach ($firmwareVersion in $firmwareVersions)
+				{
+					[string]$firmwareVersionString = $firmwareVersion
+					$firmwareVersionArr = $firmwareVersionString.split(".") | select -first 2
+					$firmwareVersionResult = $firmwareVersionArr -join "."
+					
+					write-host "DEBUG - Checking if driver version online $($AdapterFeatures.driverVersion) equals host driver $driverVersion "
+					write-host "DEBUG - Checking if firmware version online $($AdapterFeatures.firmwareVersion) equals host firmware $firmwareVersionResult "
+					if (($AdapterFeatures.driverVersion -like "*$driverVersion*") -and (($AdapterFeatures.firmwareVersion -like "*$firmwareVersionResult*") -or ($AdapterFeatures.firmwareVersion -like $null) -or ($AdapterFeatures.firmwareVersion -eq "N/A") ))
+					{
+						$device.Supported = "Compatible"
+					}
+				}
+            }			
         }
 
         $device.reference = $matches -join (";")
 
         $device.DeviceWarnings = $response.searchResult.warnings -join ";"
-        if ($device.DeviceWarnings)
-        {
-            $device.supported = "Not Compatible"
-        }
+
         $AllDevicesWithSupport += $device
     }
     return $AllDevicesWithSupport
@@ -456,7 +495,7 @@ Function _GetServerList ($esxhost)
         }
 		$vendor=$Info.Manufacturer 
         $cpuFeatureId= $vmhost.ExtensionData.Hardware.CpuFeature[1].Eax
-        if (($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease) -and ($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease))
+        if (($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease) -and ($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease) -and ($vendor -like "*HPE*"))
         {
             $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)_$($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease).$($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease)"
         }
@@ -486,7 +525,7 @@ Function _GetServerList ($esxhost)
             $references.Add($potentialMatch.vcgLink)
             foreach ($BiosFeatures in $potentialMatch.features)
             {
-                if ($BiosFeatures.bios -cmatch $bios)
+                if ($BiosFeatures.bios -like "*$bios*")
                 {
                     $Info.Supported = "Compatible"
                 }
@@ -540,6 +579,7 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
                 $Line.DeviceClass = $Device.DeviceClass
                 $Line.vid = $Device.vid
                 $Line.did = $Device.did
+				$Line.svid = $Device.svid
                 $Line.ssid = $Device.ssid
                 $Line.Driver = $Device.Driver
                 $Line.DriverVersion = $Device.DriverVersion
@@ -561,21 +601,28 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
 function _ExecuteHardwareReport ($esxHostName)
 {
     ## Run all functions
+	write-host "##### GETTING SERVER LIST #####"
     $ServerList = _GetServerList $esxHostName
+	write-host "##### GETTING SERVER ONLINE SUPPORT #####"
     $ServerListWithSupport = _CheckServerOnline $ServerList
 
+	write-host "##### GETTING DEVICE LIST #####"
     $DeviceList = _GetDeviceList $esxHostName
+	write-host "##### GETTING DEVICE ONLINE SUPPORT #####"
     $DeviceListWithSupport = _CheckDeviceOnline $DeviceList $OfflineHCL
 
     $FinalList = _MergeLists $ServerListWithSupport $DeviceListWithSupport
     return $FinalList
 }
 
-function _SendMail($emailTo, $emailSubject, $emailBody)
+function _SendMail($smtpServer, $smtpPort, $smtpCredentials, $smtpSSL, $emailTo, $emailSubject, $emailBody)
 {
 	write-host "Sending address $emailTo with body:  `n $emailBody"
-	[string[]]$To = $emailTo.Split(',')
-	Send-MailMessage -SmtpServer $smtpServer -from $fromAddr -to $To -Subject $emailSubject -Body  $emailBody -Attachments .\logs\esxHardwareReport_$logdate.csv, .\logs\esxConfigurationReport_$logdate.csv
+	if($emailTo -isNot [system.array])
+	{
+		[string[]]$emailTo = $emailTo.Split(',')
+	}
+	Send-MailMessage -SmtpServer $smtpServer -Port $smtpPort -UseSsl $smtpSSL -smtpCredentials $smtpCredentials -from $fromAddr -to $emailTo -Subject $emailSubject -Body  $emailBody -Attachments .\logs\esxHardwareReport_$logdate.csv, .\logs\esxConfigurationReport_$logdate.csv
 }
 
 
@@ -662,8 +709,12 @@ function _Main
 	$vCenterServer = $credentials.VcName
 	$smtpServer = $credentials.SmtpServer
 	$fromAddr = $credentials.fromAddr
-	$toAddress = $credentials.toAddr 
-	
+	$toAddress = $credentials.toAddress 
+	$smtpPort = $credentials.smtpPort 
+	$smtpCredentials = $credentials.smtpCredentials 
+	$smtpSSL = $credentials.smtpSSL 
+
+
 	$vcUsername =  $credentials.VcCredentials.UserName  
 	$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($credentials.VcCredentials.Password)
 	$global:vcPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
@@ -822,18 +873,17 @@ function _Main
     
 	    Write-Host "Comparing list to its defaults"
 	    $esxConfigurationReportDifferences = _ConfCompareToCsv $esxConfigurationReport $esxHardwareReport
-        
         if ($esxConfigurationReportDifferences)
         {
 			$emailSubject = "ESXi hosts configuration differences"
-		    _SendMail $toAddress $emailSubject $esxConfigurationReportDifferences
+		    $emailBody = $esxConfigurationReportDifferences
         }
 		else
 		{
 			$emailSubject = "New ESXi hosts joined the vCenter"
 			$emailBody = "New ESXi hosts joined the vCenter"
-			_SendMail $toAddress $emailSubject $emailBody
 		}
+		_SendMail $smtpServer $smtpPort $smtpCredentials $smtpSSL $toAddress $emailSubject $emailBody
 	}
 }
 

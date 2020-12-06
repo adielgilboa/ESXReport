@@ -1,19 +1,53 @@
-$vcname = read-host "Please enter vCenter Server"
-$esxCred = Get-Credential -Message "ESX Credentials" -UserName root
-$vcenterPassword = Get-Credential -Message "vCenter Credentials"
+param
+(
+    [Parameter(Mandatory=$true)]
+    [string]$vcName,
+	[Parameter(Mandatory=$true)]
+    [string]$vcenterUsername = "administrator@vsphere.local",
+	[Parameter(Mandatory=$true)]
+    [SecureString]$vcenterPassword,
+	[Parameter(Mandatory=$true)]
+    [string]$smtpServer = "smtp.office365.com",
+	[Parameter(Mandatory=$true)]
+    [Int32]$smtpPort = "587",
+	[Parameter(Mandatory=$true)]
+    [string]$smtpAuthUserName,
+	[Parameter(Mandatory=$true)]
+    [SecureString]$smtpAuthPassword,
+	[Parameter(Mandatory=$true)]
+    [string]$fromAddr,
+	[Parameter(Mandatory=$true)]
+    [String[]]$toAddr,
+	[Parameter(Mandatory=$true)]
+    [boolean]$smtpSSL = $true
+)
+		
+$toAddr = $toAddr.split(",")		
 
-$smtpServer = read-host "Please enter SMTP Server"
-$fromAddr = read-host "Please enter from email address"
-$toAddr = read-host "Please enter destination email address (comma separated)"
-$toAddr = $toAddr.split(",")
 
+# Convert to SecureString
+if (($smtpAuthUserName -eq $null) -or ($smtpAuthPassword -eq $null))
+{
+	$smtpAuthUserName = "NoSMTPUser"
+	$smtpAuthPassword = "NoSMTPPasword"
+	[securestring]$smtpAuthPassword = ConvertTo-SecureString $smtpAuthPassword -AsPlainText -Force
+}
+[pscredential]$smtpCredentials = New-Object System.Management.Automation.PSCredential ($smtpAuthUserName, $smtpAuthPassword)
+[pscredential]$vcenterCredentials = New-Object System.Management.Automation.PSCredential ($vcenterUsername, $vcenterPassword)
 
 $myObject = New-Object -TypeName psobject
-$myObject | Add-Member -MemberType NoteProperty -Name VcCredentials -Value $vcenterPassword
+$myObject | Add-Member -MemberType NoteProperty -Name VcCredentials -Value $vcenterCredentials
 $myObject | Add-Member -MemberType NoteProperty -Name VcName -Value $vcname
 $myObject | Add-Member -MemberType NoteProperty -Name SmtpServer -Value $smtpServer
 $myObject | Add-Member -MemberType NoteProperty -Name toAddr -Value $toAddr
 $myObject | Add-Member -MemberType NoteProperty -Name fromAddr -Value $fromAddr
+
+$myObject | Add-Member -MemberType NoteProperty -Name smtpCredentials -Value $smtpCredentials
+$myObject | Add-Member -MemberType NoteProperty -Name smtpPort -Value $smtpPort
+$myObject | Add-Member -MemberType NoteProperty -Name smtpSSL -Value $smtpSSL
+
+
+
 
 $myObject | Export-Clixml "esxReportDataCRD.xml"
 
