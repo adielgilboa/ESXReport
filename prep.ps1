@@ -22,8 +22,6 @@ param
     [boolean]$smtpSSL = $true
 )
 		
-$toAddr = $toAddr.split(",")		
-
 
 # Convert to SecureString
 if (($smtpAuthUserName -eq $null) -or ($smtpAuthPassword -eq $null))

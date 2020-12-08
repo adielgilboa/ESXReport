@@ -359,8 +359,6 @@ Function _CheckDeviceOnline ($DeviceList, $OfflineHCL)
 					$firmwareVersionArr = $firmwareVersionString.split(".") | select -first 2
 					$firmwareVersionResult = $firmwareVersionArr -join "."
 					
-					write-host "DEBUG - Checking if driver version online $($AdapterFeatures.driverVersion) equals host driver $driverVersion "
-					write-host "DEBUG - Checking if firmware version online $($AdapterFeatures.firmwareVersion) equals host firmware $firmwareVersionResult "
 					if (($AdapterFeatures.driverVersion -like "*$driverVersion*") -and (($AdapterFeatures.firmwareVersion -like "*$firmwareVersionResult*") -or ($AdapterFeatures.firmwareVersion -like $null) -or ($AdapterFeatures.firmwareVersion -eq "N/A") ))
 					{
 						$device.Supported = "Compatible"
@@ -501,8 +499,9 @@ Function _GetServerList ($esxhost)
 			
 			$biosDateString = $vmhost.ExtensionData.Hardware.BiosInfo.ReleaseDate.ToString("MM-dd-yyy")
 			$biosModel = $vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion
-			$bios.server_bios_mapping |where {$_.bios_model -eq $biosModel} | select -ExpandProperty "bios_version" | where {$_ -like "*$biosDateString*"}
-            #$bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)_$($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease).$($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease)"
+			$biosMajorMinor = $HpBiosHcl.server_bios_mapping |where {$_.bios_model -eq $biosModel} | select -ExpandProperty "bios_version" | where {$_ -like "*$biosDateString*"}
+			$biosMajorMinor = $biosMajorMinor.split("_")[0]
+            $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)_$($biosMajorMinor)"
         }
         else
         {
@@ -622,12 +621,8 @@ function _ExecuteHardwareReport ($esxHostName)
 
 function _SendMail($smtpServer, $smtpPort, $smtpCredentials, $smtpSSL, $emailTo, $emailSubject, $emailBody)
 {
-	write-host "Sending address $emailTo with body:  `n $emailBody"
-	if($emailTo -isNot [system.array])
-	{
-		[string[]]$emailTo = $emailTo.Split(',')
-	}
-	Send-MailMessage -SmtpServer $smtpServer -Port $smtpPort -UseSsl $smtpSSL -smtpCredentials $smtpCredentials -from $fromAddr -to $emailTo -Subject $emailSubject -Body  $emailBody -Attachments .\logs\esxHardwareReport_$logdate.csv, .\logs\esxConfigurationReport_$logdate.csv
+	write-host "Sending to address $emailTo with body:  `r`n <br /> $emailBody"
+	Send-MailMessage -SmtpServer $smtpServer -BodyAsHtml -Port $smtpPort -UseSsl:$smtpSSL -credential $smtpCredentials -from $fromAddr -to $emailTo -Subject $emailSubject -Body  $emailBody -Attachments .\logs\esxHardwareReport_$logdate.csv, .\logs\esxConfigurationReport_$logdate.csv
 }
 
 
@@ -648,36 +643,36 @@ function _ConfCompareToCsv ($esxConfigurationReport, $esxHardwareReport)
         # Check conf             
         if (($esxConfiguration.isHAActive -ne $ESXConfigurationCsv.isHAActive) -or ($esxConfiguration.HAFailoverLevel -ne $ESXConfigurationCsv.HAFailoverLevel))
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " HA mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi + " HA mismatch"
         }
         
         if (($esxConfiguration.DRSMode -ne $ESXConfigurationCsv.DRSMode) -or ($esxConfiguration.isDRSActive -ne $ESXConfigurationCsv.isDRSActive))
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi  + " DRS mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi  + " DRS mismatch"
         }
         
         if ($esxConfiguration.ClusterEVCMode -ne $esxConfiguration.ClusterEVCMode)
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " EVC mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi + " EVC mismatch"
         }
         
         if ($esxConfiguration.ScratchConfig -notlike   "/vmfs/volumes/*")
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " Scratch Partition mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi + " Scratch Partition mismatch"
         }
         
         if ($esxConfiguration.SyslogConfig -ne $ESXConfigurationCsv.SyslogConfig )
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi +  " Syslog mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi +  " Syslog mismatch"
         }
         
         if (($esxConfiguration.isNTPConfigured  -ne $ESXConfigurationCsv.isNTPConfigured ) -or ($esxConfiguration.isNTPRunning  -ne $ESXConfigurationCsv.isNTPRunning) )
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " NTP mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi + " NTP mismatch"
         }
 		if ($esxConfiguration.vmk0_Portgroup.toLower().indexOf("esxi management 180") -eq -1 ) 
         {
-            $Gaps =  $Gaps + " `n Host " + $esxConfiguration.ESXi + " Portgroup mismatch"
+            $Gaps =  $Gaps + " `r`n <br /> Host " + $esxConfiguration.ESXi + " Portgroup mismatch"
         }
         
 	}
@@ -686,13 +681,13 @@ function _ConfCompareToCsv ($esxConfigurationReport, $esxHardwareReport)
 	{
 		if ($esxHardware.Supported -ne "Compatible")
 		{
-			$Gaps =  $Gaps + "`n Host " +$esxHardware.VMHost + " device " + $esxHardware.Device + " driver-firmware mismatch"
+			$Gaps =  $Gaps + "`r`n <br /> Host " +$esxHardware.VMHost + " device " + $esxHardware.Device + " driver-firmware mismatch"
 		}
 		if ($esxHardware.ServerSupported -ne "Compatible")
 		{
             if ($gaps -notmatch "Host " +$esxHardware.VMHost + " Host version mismatch")
             {
-			    $Gaps =  $Gaps + "`n Host " +$esxHardware.VMHost + " Host version mismatch"
+			    $Gaps =  $Gaps + "`r`n <br /> Host " +$esxHardware.VMHost + " Host version mismatch"
             }
 		}
 	}	
@@ -714,7 +709,7 @@ function _Main
 	$vCenterServer = $credentials.VcName
 	$smtpServer = $credentials.SmtpServer
 	$fromAddr = $credentials.fromAddr
-	$toAddress = $credentials.toAddress 
+	$toAddress = $credentials.toAddr 
 	$smtpPort = $credentials.smtpPort 
 	$smtpCredentials = $credentials.smtpCredentials 
 	$smtpSSL = $credentials.smtpSSL 
@@ -749,7 +744,7 @@ function _Main
 	}
 
 	# Get hosts from vCenter and checks if the host is new according to the local XML file
-	$esxhosts = get-vmhost  | where {$_.Manufacturer -NE "VMware"} | where {$_.state -eq "Connected" -or $_.state -eq "Maintenance"}
+	$esxhosts = get-vmhost | where {$_.Manufacturer -NE "VMware"} | where {$_.state -eq "Connected" -or $_.state -eq "Maintenance"}
 
 	$runtime = get-date
 	$runtime = $runtime.ToUniversalTime()
