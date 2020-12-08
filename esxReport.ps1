@@ -495,9 +495,14 @@ Function _GetServerList ($esxhost)
         }
 		$vendor=$Info.Manufacturer 
         $cpuFeatureId= $vmhost.ExtensionData.Hardware.CpuFeature[1].Eax
-        if (($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease) -and ($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease) -and ($vendor -like "*HPE*"))
+        if ($vendor -like "*HPE*") # ($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease) -and ($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease)
         {
-            $bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)_$($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease).$($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease)"
+			$biosVersion = $vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion
+			
+			$biosDateString = $vmhost.ExtensionData.Hardware.BiosInfo.ReleaseDate.ToString("MM-dd-yyy")
+			$biosModel = $vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion
+			$bios.server_bios_mapping |where {$_.bios_model -eq $biosModel} | select -ExpandProperty "bios_version" | where {$_ -like "*$biosDateString*"}
+            #$bios = "$($vmhost.ExtensionData.Hardware.BiosInfo.BiosVersion)_$($vmhost.ExtensionData.Hardware.BiosInfo.MajorRelease).$($vmhost.ExtensionData.Hardware.BiosInfo.MinorRelease)"
         }
         else
         {
@@ -719,7 +724,10 @@ function _Main
 	$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($credentials.VcCredentials.Password)
 	$global:vcPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
 
-
+	$HpBiosHcl = Get-Content -Raw -Path ".\resources_hpe-server-bios-mapping.json" |  ConvertFrom-Json
+	
+	
+	
 	$esxConfigurationReport = New-Object System.Collections.ArrayList
 	$esxHardwareReport = New-Object System.Collections.ArrayList
 
