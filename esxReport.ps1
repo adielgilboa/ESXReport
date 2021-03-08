@@ -1174,17 +1174,46 @@ Function _CheckServerOnline ($ServerList)
     #T.B.D
     return $ServerList
 }
-Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
+Function _isServerCompatible ($ServerListWithSupport, $DeviceListWithSupport, $ESXHostName)
+{
+    $isSupported = "Compatible"
+    foreach ($device in $DeviceListWithSupport | where {$_.VMHost -eq $ESXHostName} ) 
+    {
+        if ($device.VMHost -eq $ESXHostName)
+        {
+            if ($device.Supported -eq "Not Compatible")
+            {
+                $isSupported = "Not Compatible"
+                return $isSupported
+            }
+        }
+    }
+    foreach ($server in $ServerListWithSupport | where {$_.VMHost -eq $ESXHostName})
+    {
+        if ($Server.VMHost -eq $ESXHostName) 
+        {
+            if ($Server.Supported -eq "Not Compatible")
+            {
+                $isSupported = "Not Compatible"
+                return $isSupported 
+            }
+        }
+    }
+    return $isSupported 
+}
+
+Function _MergeListsAndCheckOverallCompatibility ($ServerListWithSupport, $DeviceListWithSupport)
 {
     $FinalList = @()
     foreach ($device in $DeviceListWithSupport) 
     {
-        $Line = "" | Select Parent, VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, BiosVersion, BiosReleaseDate, ServerCpu, ServerSupported, ServerSupportedReleases, ServerReference, ServerNote, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,DeviceWarnings, Reference
+        $Line = "" | Select Parent, ServerCompatible, VMHost, ServerBuild, ServerReleaseLevel, ServerManufacturer, ServerModel, BiosVersion, BiosReleaseDate, ServerCpu, ServerBiosSupported, ServerSupportedReleases, ServerReference, ServerNote, VMHostVersion,VMHostBuild, Device, DeviceName, VendorName, DeviceClass, vid, did, svid, ssid, Driver, DriverVersion, FirmwareVersion, VibVersion, Supported,DeviceWarnings, Reference
         foreach ($server in $ServerListWithSupport)
         {
             if ($Device.VMHost -match '^'+$server.VMHost+'$')
             {
                 $Line.Parent = $device.parent
+                $Line.ServerCompatible = _isServerCompatible $DeviceListWithSupport $ServerListWithSupport $Device.VMHost
                 $Line.VMHost = $device.VMHost
                 $Line.ServerBuild = $server.Build
                 $Line.ServerReleaseLevel = $server.ReleaseLevel
@@ -1193,7 +1222,7 @@ Function _MergeLists ($ServerListWithSupport, $DeviceListWithSupport)
 				$Line.BiosVersion = $server.BiosVersion
 				$Line.BiosReleaseDate = $server.BiosReleaseDate
                 $Line.ServerCpu = $server.Cpu
-                $Line.ServerSupported = $server.Supported
+                $Line.ServerBiosSupported = $server.Supported
                 $Line.ServerSupportedReleases = $server.SupportedReleases
                 $Line.ServerReference = $server.Reference
                 $Line.ServerNote = $server.Note
@@ -1235,7 +1264,8 @@ function _ExecuteHardwareReport ($esxHostName)
 	write-host "##### GETTING DEVICE ONLINE SUPPORT #####"
     $DeviceListWithSupport = _CheckDeviceOnline $DeviceList $OfflineHCL
 
-    $FinalList = _MergeLists $ServerListWithSupport $DeviceListWithSupport
+    $FinalList = _MergeListsAndCheckOverallCompatibility $ServerListWithSupport $DeviceListWithSupport
+
     return $FinalList
 }
 function _SendMail($smtpServer, $smtpPort, $smtpCredentials, $smtpSSL, $emailTo, $emailSubject, $emailBody)
