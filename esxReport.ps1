@@ -1525,12 +1525,12 @@ function _Main
 	    $esxConfigurationReportDifferences = _ConfCompareToCsv $esxConfigurationReport $esxHardwareReport
         if ($esxConfigurationReportDifferences)
         {
-			$emailSubject = "ESXi hosts configuration differences"
+			$emailSubject = "$vCenterServer ESXi hosts configuration differences"
 		    $emailBody = $esxConfigurationReportDifferences
         }
 		else
 		{
-			$emailSubject = "New ESXi hosts joined the vCenter"
+			$emailSubject = "$vCenterServer New ESXi hosts joined the vCenter"
 			$emailBody = "New ESXi hosts joined the vCenter"
 		}
 		_SendMail $smtpServer $smtpPort $smtpCredentials $smtpSSL $toAddress $emailSubject $emailBody
